@@ -50,3 +50,16 @@ CREATE TABLE comments (
     `username` TEXT NOT NULL,
 	`text` TEXT NOT NULL
 );
+
+-- Create the comments table if it doesn't already exist
+CREATE TABLE IF NOT EXISTS `comments` (
+    `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+    `username` TEXT NOT NULL,
+    `text` TEXT NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `post_id` INTEGER,
+    FOREIGN KEY (`username`) REFERENCES `users` (`username`),
+    FOREIGN KEY (`post_id`) REFERENCES `posts` (`id`)
+);
+
+

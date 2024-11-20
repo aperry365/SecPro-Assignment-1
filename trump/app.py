@@ -1,25 +1,12 @@
 import os
 import sqlite3
-import secrets # Changes: Added to replace hardcoded secret key
-import re # Changes: Added to secure search route
-import html # Changes: Added to secure search route
 from flask import Flask, render_template, request, Response, redirect, url_for, flash, session, send_from_directory, abort, send_file
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
-from datetime import timedelta # Changes: Added to enforce session expiry
 
-# Changed: Added secure key generator
+
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)  # ** Changed: Replaced hardcoded key with dynamically generated key
-
-# Changes: Added secure session cookie configuration
-app.config.update(
-    SESSION_COOKIE_SECURE=True,  # Ensures cookies are only sent over HTTPS
-    SESSION_COOKIE_HTTPONLY=True,  # Prevent access via JavaScript
-)
-
-# Changes: Added session timeout
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
+app.secret_key = 'trump123'  # Set a secure secret key
 
 # Configure the SQLite database
 db_path = os.path.join(os.path.dirname(__file__), 'trump.db')
@@ -61,9 +48,15 @@ def quotes():
 def sitemap():
     return render_template('sitemap.html')
     
-@app.route('/admin_panel')
+@app.route('/admin_panel', methods=['GET'])
 def admin_panel():
-    return render_template('admin_panel.html')
+    # Check if the user is logged in as admin
+    if 'user_id' in session and session['user_id'] == 'admin':
+        return render_template('admin_panel.html')
+    else:
+        flash('Access restricted. Admins only.', 'error')
+        return redirect(url_for('login'))
+
 
 # Route to handle redirects based on the destination query parameter
 @app.route('/redirect', methods=['GET'])
@@ -79,38 +72,53 @@ def redirect_handler():
 @app.route('/comments', methods=['GET', 'POST'])
 def comments():
     if request.method == 'POST':
-        username = request.form['username']
+        # Check if the user is logged in
+        if 'user_id' not in session:
+            flash('You must be logged in to post a comment.', 'error')
+            return redirect(url_for('login'))
+
+        # Retrieve user and validate in the database
+        user_id = session['user_id']
         comment_text = request.form['comment']
 
-        # Insert comment into the database
-        insert_comment_query = text("INSERT INTO comments (username, text) VALUES (:username, :text)")
-        db.session.execute(insert_comment_query, {'username': username, 'text': comment_text})
-        db.session.commit()
-        return redirect(url_for('comments'))
+        query = text("SELECT username FROM users WHERE id = :id")
+        user = db.session.execute(query, {'id': user_id}).fetchone()
 
-    # Retrieve all comments to display
+        if user:
+            username = user.username
+            # Insert the comment
+            insert_comment_query = text("INSERT INTO comments (username, text) VALUES (:username, :text)")
+            db.session.execute(insert_comment_query, {'username': username, 'text': comment_text})
+            db.session.commit()
+            flash('Comment posted successfully!', 'success')
+        else:
+            flash('Invalid user. Unable to post comment.', 'error')
+            return redirect(url_for('login'))
+
+    # Retrieve all comments for viewing
     comments_query = text("SELECT username, text FROM comments")
     comments = db.session.execute(comments_query).fetchall()
     return render_template('comments.html', comments=comments)
 
-# Changes:
-# - Path validation added to ensure that files served for download are within the 'docs' directory.
-# - Directory traversal protection added to prevent access to files outside the 'docs' folder.
+
 @app.route('/download', methods=['GET'])
 def download():
     # Get the filename from the query parameter
     file_name = request.args.get('file', '')
 
-    # Set base directory to where your docs folder is located
+    
     base_directory = os.path.join(os.path.dirname(__file__), 'docs')
 
-    # Construct the file path to attempt to read the file
+   
     file_path = os.path.abspath(os.path.join(base_directory, file_name))
 
-    # Ensure that the file path is within the base directory
-    # ** Changed: Added check to prevent directory traversal and unauthorized file access.
+   
     if not file_path.startswith(base_directory):
-        return "Unauthorized access attempt!", 403
+        abort(404)  # Redirects to custom 404 page for invalid paths
+
+    
+    if not os.path.isfile(file_path):
+        abort(404)  # Redirects to custom 404 page if it's not a file
 
     # Try to open the file securely
     try:
@@ -118,73 +126,63 @@ def download():
             response = Response(f.read(), content_type='application/octet-stream')
             response.headers['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
             return response
-    except FileNotFoundError:
-        return "File not found", 404
-    except PermissionError:
-        return "Permission denied while accessing the file", 403
+    except Exception:
+        abort(404) 
+        
 
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template('404.html'), 404
+        
 @app.route('/downloads', methods=['GET'])
 def download_page():
     return render_template('download.html')
 
-# Changes:
-# - Added verification for current user logged in
-# - Added query parameters to fetch user details securely
+
 @app.route('/profile/<int:user_id>', methods=['GET'])
 def profile(user_id):
-
-    # Check if user is logged in
-    if 'user_id' not in session or session['user_id'] != user_id:
-        return "Unauthorized access.", 403
-
-    # Parameterized query to fetch details
-    query_user = text("SELECT * FROM users WHERE id = :id")
-    user = db.session.execute(query_user, {'id': user_id}).fetchone()
+    query_user = text(f"SELECT * FROM users WHERE id = {user_id}")
+    user = db.session.execute(query_user).fetchone()
 
     if user:
-        # Parameterized query for card details
-        query_cards = text("SELECT * FROM carddetail WHERE id = :id")
-        cards = db.session.execute(query_cards, {'id': user_id}).fetchall()
+        query_cards = text(f"SELECT * FROM carddetail WHERE id = {user_id}")
+        cards = db.session.execute(query_cards).fetchall()
         return render_template('profile.html', user=user, cards=cards)
     else:
-        return "User not found.", 404
-# Changes:
-# Added alphanumeric input validation
-# Sanitize query with HTML character escape
+        return "User not found or unauthorized access.", 403
+        
+
+
+
+
 @app.route('/search', methods=['GET'])
 def search():
-    # Get query parameter from URL
-    query = request.args.get('query', '')
-
-    # Validate input to only allow alphanumeric characters
-    if query and not re.match("^[a-zA-Z0-9 ]*$", query):  # Only letters, numbers, and spaces allowed
-        return "Invalid input! Please only use alphanumeric characters."
-
-    # Sanitize query to escape HTML characters
-    sanitized_query = html.escape(query)
-
-    # Render the template with sanitized query
-    return render_template('search.html', query=sanitized_query)
+    query = request.args.get('query')
+    return render_template('search.html', query=query)
 
 @app.route('/forum')
 def forum():
     return render_template('forum.html')
 
 # Add login route
-# Changes:
-# - Set session as permanent for logged in user to allocate 30 minute lifetime
-# - Used parameterized queries to secure login field against SQL injection
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
 
-        query = text("SELECT * FROM users WHERE username = :username AND password = :password")
-        user = db.session.execute(query, {'username': username, 'password': password}).fetchone()
+        # Directly query the database
+        query = text("SELECT * FROM users WHERE username = '{username}' AND password = '{password}'")
+        user = db.session.execute(query).fetchone()
 
+        # Check for admin credentials
+        if username == 'admin' and password == 'admin321':
+            session['user_id'] = 'admin'
+            flash('Admin login successful!', 'success')
+            return redirect(url_for('admin_panel'))
+
+        # Check for regular user credentials
         if user:
-            session.permanent = True # Changed: Set to permanenent for timeout
             session['user_id'] = user.id
             flash('Login successful!', 'success')
             return redirect(url_for('profile', user_id=user.id))
@@ -195,14 +193,13 @@ def login():
     return render_template('login.html')
 
 
+
+
+
 # Logout route
-# Changes:
-# - Clear session data on logout
-# - Disable 30 min session permanence
 @app.route('/logout')
 def logout():
-    session.clear()  # Changed: Added .clear instead of .pop
-    session.permanent = False # Changed: Disable session permanence
+    session.pop('user_id', None)  # Remove user session
     flash('You were successfully logged out', 'success')
     return redirect(url_for('index'))
     
@@ -214,3 +211,5 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()  # Create tables based on models if they don't already exist
     app.run(debug=True)
+    
+
