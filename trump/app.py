@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import secrets # Changes: Added to replace hardcoded secret key
+import re # Changes: Added to secure search route
+import html # Changes: Added to secure search route
 from flask import Flask, render_template, request, Response, redirect, url_for, flash, session, send_from_directory, abort, send_file
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -16,7 +18,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,  # Prevent access via JavaScript
 )
 
-# Changes: Added session timeout 
+# Changes: Added session timeout
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
 
 # Configure the SQLite database
@@ -131,11 +133,11 @@ def download_page():
 @app.route('/profile/<int:user_id>', methods=['GET'])
 def profile(user_id):
 
-    # Check if user is logged in 
+    # Check if user is logged in
     if 'user_id' not in session or session['user_id'] != user_id:
         return "Unauthorized access.", 403
 
-    # Parameterized query to fetch details 
+    # Parameterized query to fetch details
     query_user = text("SELECT * FROM users WHERE id = :id")
     user = db.session.execute(query_user, {'id': user_id}).fetchone()
 
@@ -146,11 +148,23 @@ def profile(user_id):
         return render_template('profile.html', user=user, cards=cards)
     else:
         return "User not found.", 404
-
+# Changes:
+# Added alphanumeric input validation
+# Sanitize query with HTML character escape
 @app.route('/search', methods=['GET'])
 def search():
-    query = request.args.get('query')
-    return render_template('search.html', query=query)
+    # Get query parameter from URL
+    query = request.args.get('query', '')
+
+    # Validate input to only allow alphanumeric characters
+    if query and not re.match("^[a-zA-Z0-9 ]*$", query):  # Only letters, numbers, and spaces allowed
+        return "Invalid input! Please only use alphanumeric characters."
+
+    # Sanitize query to escape HTML characters
+    sanitized_query = html.escape(query)
+
+    # Render the template with sanitized query
+    return render_template('search.html', query=sanitized_query)
 
 @app.route('/forum')
 def forum():
@@ -184,10 +198,10 @@ def login():
 # Logout route
 # Changes:
 # - Clear session data on logout
-# - Disable 30 min session permanence 
+# - Disable 30 min session permanence
 @app.route('/logout')
 def logout():
-    session.clear()  # Changed: Added .clear instead of .pop 
+    session.clear()  # Changed: Added .clear instead of .pop
     session.permanent = False # Changed: Disable session permanence
     flash('You were successfully logged out', 'success')
     return redirect(url_for('index'))
