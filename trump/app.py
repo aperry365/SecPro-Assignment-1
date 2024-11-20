@@ -83,24 +83,19 @@ def redirect_handler():
 @app.route('/comments', methods=['GET', 'POST'])
 def comments():
     if request.method == 'POST':
-        username = request.form['username'].strip()  # Ensure no leading/trailing spaces
-        comment_text = request.form['comment'].strip()
+        username = request.form['username']
+        comment_text = request.form['comment']
 
-        # Validate form inputs
-        if not username or not comment_text:
-            flash('Username and comment are required!', 'error')
-            return redirect(url_for('comments'))
-
-        # Insert comment into the database with SQLAlchemy
-        new_comment = Comment(username=username, text=comment_text)
-        db.session.add(new_comment)
+        # Insert comment into the database
+        insert_comment_query = text("INSERT INTO comments (username, text) VALUES (:username, :text)")
+        db.session.execute(insert_comment_query, {'username': username, 'text': comment_text})
         db.session.commit()
-        flash('Comment added successfully!', 'success')
         return redirect(url_for('comments'))
 
-    # Retrieve all comments to display, ordered by most recent
-    comments_query = Comment.query.order_by(Comment.timestamp.desc()).all()  # Assuming a timestamp field
-    return render_template('comments.html', comments=comments_query)
+    # Retrieve all comments to display
+    comments_query = text("SELECT username, text FROM comments")
+    comments = db.session.execute(comments_query).fetchall()
+    return render_template('comments.html', comments=comments)
 
 
 # Changes:
